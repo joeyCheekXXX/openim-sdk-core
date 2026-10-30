@@ -67,10 +67,15 @@ func newMessageSender(conversation *Conversation) *messageSender {
 }
 
 func (m *messageSender) submit(task *sendTask) error {
+	if err := m.conversation.ctx.Err(); err != nil {
+		return err
+	}
 	task.enqueueAt = time.Now()
 	m.decorate(task)
 	for i := 0; i < maxSendEnqueueRetry; i++ {
 		select {
+		case <-m.conversation.ctx.Done():
+			return m.conversation.ctx.Err()
 		case m.queue <- task:
 			return nil
 		default:
@@ -119,8 +124,13 @@ func (m *messageSender) shouldKeepMediaOrdered(size int64) bool {
 
 func (m *messageSender) worker() {
 	defer m.wg.Done()
-	for task := range m.queue {
-		m.runTask(task)
+	for {
+		select {
+		case <-m.conversation.ctx.Done():
+			return
+		case task := <-m.queue:
+			m.runTask(task)
+		}
 	}
 }
 

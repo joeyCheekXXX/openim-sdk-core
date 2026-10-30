@@ -89,6 +89,10 @@ func CheckResourceLoad(uSDK *LoginMgr, funcName string) error {
 }
 
 type LoginMgr struct {
+	// lifecycleMu serializes local close with SDK-triggered logout.
+	lifecycleMu sync.Mutex
+	closed      bool
+
 	relation     *relation.Relation
 	group        *group.Group
 	conversation *conv.Conversation
@@ -326,6 +330,11 @@ func (u *LoginMgr) handlerSendingMsg(ctx context.Context, sendingMsg *model_stru
 }
 
 func (u *LoginMgr) login(ctx context.Context, userID, token string) error {
+	u.lifecycleMu.Lock()
+	defer u.lifecycleMu.Unlock()
+	if u.closed {
+		return sdkerrs.ErrSdkInternal.WrapMsg("SDK instance is closed")
+	}
 	if u.getLoginStatus(ctx) == Logged {
 		return sdkerrs.ErrLoginRepeat
 	}
@@ -434,6 +443,11 @@ func (u *LoginMgr) UnInitSDK() {
 
 // token error recycle recourse, kicked not recycle
 func (u *LoginMgr) logout(ctx context.Context, isTokenValid bool) error {
+	u.lifecycleMu.Lock()
+	defer u.lifecycleMu.Unlock()
+	if u.closed {
+		return nil
+	}
 	if ccontext.Info(ctx).OperationID() == LogoutTips {
 		isTokenValid = true
 	}
@@ -447,6 +461,9 @@ func (u *LoginMgr) logout(ctx context.Context, isTokenValid bool) error {
 			log.ZDebug(ctx, "TriggerCmdLogout server recycle resources success...")
 		}
 	}
+	// Close the old socket before initResources replaces its owner. Cancellation
+	// alone cannot wake a readPump already blocked in ReadMessage.
+	u.longConnMgr.Close(ctx)
 	u.Exit()
 	err := u.db.Close(u.ctx)
 	if err != nil {
@@ -477,4 +494,27 @@ func (u *LoginMgr) setAppBackgroundStatus(ctx context.Context, isBackground bool
 
 func (u *LoginMgr) LongConnMgr() *interaction.LongConnMgr {
 	return u.longConnMgr
+}
+
+// Close permanently releases this instance's local resources without revoking the
+// remote session. Unlike Logout, it does not initialize another connection context.
+// Create a new LoginMgr for the next authentication cycle.
+func (u *LoginMgr) Close(ctx context.Context) error {
+	u.lifecycleMu.Lock()
+	defer u.lifecycleMu.Unlock()
+	if u.closed {
+		return nil
+	}
+	u.closed = true
+	if u.longConnMgr != nil {
+		u.longConnMgr.Close(ctx)
+	}
+	if u.cancel != nil {
+		u.cancel()
+	}
+	u.setLoginStatus(0)
+	if u.db != nil {
+		return u.db.Close(ctx)
+	}
+	return nil
 }

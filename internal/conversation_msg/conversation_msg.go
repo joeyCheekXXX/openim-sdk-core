@@ -43,6 +43,7 @@ const (
 var SearchContentType = []int{constant.Text, constant.AtText, constant.File}
 
 type Conversation struct {
+	ctx context.Context
 	*interaction.LongConnMgr
 	conversationSyncer          *syncer.Syncer[*model_struct.LocalConversation, pbConversation.GetOwnerConversationResp, string]
 	db                          db_interface.DataBase
@@ -102,7 +103,7 @@ func NewConversation(ctx context.Context, longConnMgr *interaction.LongConnMgr, 
 	recvCh, msgSyncerCh chan common.Cmd2Value, relation *relation.Relation, group *group.Group, user *user.User,
 	file *file.File) *Conversation {
 	info := ccontext.Info(ctx)
-	n := &Conversation{db: db,
+	n := &Conversation{db: db, ctx: ctx,
 		LongConnMgr:                 longConnMgr,
 		conversationEventQueue:      recvCh,
 		msgSyncerCh:                 msgSyncerCh,

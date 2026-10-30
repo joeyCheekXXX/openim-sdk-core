@@ -180,7 +180,11 @@ func (c *LongConnMgr) SendReqWaitResp(ctx context.Context, m proto.Message, reqI
 		Resp:  make(chan *GeneralWsResp, 1),
 		Order: orderInfo,
 	}
-	c.send <- msg
+	select {
+	case c.send <- msg:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	log.ZDebug(ctx, "send message to send channel success", "msg", m, "reqIdentifier", reqIdentifier)
 	select {
 	case <-ctx.Done():
